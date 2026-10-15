@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -7,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"os"
@@ -105,10 +105,10 @@ func (c *Client) Get(
 }
 
 type Submissions struct {
-	Name     string `json:"name"`
-	CIK      string  `json:"cik"`
-	Tickers  []string `json:"tickers"`
-	Filings  struct {
+	Name    string   `json:"name"`
+	CIK     string   `json:"cik"`
+	Tickers []string `json:"tickers"`
+	Filings struct {
 		Recent RecentFilings `json:"recent"`
 	} `json:"filings"`
 }
@@ -147,25 +147,25 @@ type CompanyFacts struct {
 	CIK    int    `json:"cik"`
 	Entity string `json:"entityName"`
 	Facts  map[string]map[string]struct {
-		Label       string `json:"label"`
-		Description string `json:"description"`
+		Label       string                 `json:"label"`
+		Description string                 `json:"description"`
 		Units       map[string][]FactEntry `json:"units"`
 	} `json:"facts"`
 }
 
 type FinancialFact struct {
-	Company   string  `json:"company"`
-	CIK       string  `json:"cik"`
-	Concept   string  `json:"concept"`
-	Label     string  `json:"label"`
-	Unit      string  `json:"unit"`
-	Value     float64 `json:"value"`
-	Start     string  `json:"period_start,omitempty"`
-	End       string  `json:"period_end"`
-	FilingDate string `json:"filing_date"`
-	Form      string  `json:"form"`
-	Accession string  `json:"accession_number"`
-	Frame     string  `json:"frame,omitempty"`
+	Company    string  `json:"company"`
+	CIK        string  `json:"cik"`
+	Concept    string  `json:"concept"`
+	Label      string  `json:"label"`
+	Unit       string  `json:"unit"`
+	Value      float64 `json:"value"`
+	Start      string  `json:"period_start,omitempty"`
+	End        string  `json:"period_end"`
+	FilingDate string  `json:"filing_date"`
+	Form       string  `json:"form"`
+	Accession  string  `json:"accession_number"`
+	Frame      string  `json:"frame,omitempty"`
 }
 
 var validCIK = regexp.MustCompile(`^[0-9]{1,10}$`)
@@ -201,6 +201,52 @@ func (c *Client) Facts(
 		return nil, err
 	}
 	return &result, nil
+}
+
+func (c *Client) Document(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("SEC returned HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if err != nil {
+		return "", err
+	}
+	return plainText(string(body)), nil
+}
+
+var (
+	scriptTags = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script\s*>`)
+	styleTags  = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style\s*>`)
+	ixHeaders  = regexp.MustCompile(`(?is)<ix:header\b[^>]*>.*?</ix:header\s*>`)
+	tags       = regexp.MustCompile(`(?s)<[^>]*>`)
+	spaces     = regexp.MustCompile(`[\t\r ]+`)
+	blankLines = regexp.MustCompile(`\n{3,}`)
+	breaks     = regexp.MustCompile(`(?i)<br\s*/?>|</(p|div|tr|h[1-6]|li|section)\s*>`)
+)
+
+func plainText(source string) string {
+	source = scriptTags.ReplaceAllString(source, " ")
+	source = styleTags.ReplaceAllString(source, " ")
+	source = ixHeaders.ReplaceAllString(source, " ")
+	source = breaks.ReplaceAllString(source, "\n")
+	source = tags.ReplaceAllString(source, " ")
+	source = html.UnescapeString(source)
+	lines := strings.Split(source, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSpace(spaces.ReplaceAllString(line, " "))
+	}
+	return strings.TrimSpace(blankLines.ReplaceAllString(strings.Join(lines, "\n"), "\n\n"))
 }
 
 func ExtractFilings(
@@ -340,8 +386,9 @@ func run() error {
 		"cik", "", "SEC Central Index Key, e.g. 320193",
 	)
 	mode := flag.String(
-		"mode", "filings", "filings or facts",
+		"mode", "filings", "filings, document, or facts",
 	)
+	accession := flag.String("accession", "", "accession number for document mode")
 	form := flag.String(
 		"form", "", "optional form filter, e.g. 10-K or 10-Q",
 	)
@@ -366,8 +413,8 @@ func run() error {
 	if *limit < 0 {
 		return errors.New("-limit cannot be negative")
 	}
-	if *mode != "filings" && *mode != "facts" {
-		return errors.New("-mode must be filings or facts")
+	if *mode != "filings" && *mode != "document" && *mode != "facts" {
+		return errors.New("-mode must be filings, document, or facts")
 	}
 
 	cik, err := normalizeCIK(*cikFlag)
@@ -382,14 +429,31 @@ func run() error {
 
 	client := NewClient(*agent)
 
-	if *mode == "filings" {
+	if *mode == "filings" || *mode == "document" {
 		data, err := client.Submissions(ctx, cik)
 		if err != nil {
 			return err
 		}
-		return writeJSON(ExtractFilings(
-			data, cik, *form, *limit,
-		))
+		if *mode == "filings" {
+			return writeJSON(ExtractFilings(data, cik, *form, *limit))
+		}
+		filings := ExtractFilings(data, cik, *form, 0)
+		var selected *Filing
+		for i := range filings {
+			if *accession == "" || filings[i].AccessionNumber == *accession {
+				selected = &filings[i]
+				break
+			}
+		}
+		if selected == nil {
+			return fmt.Errorf("no matching filing found")
+		}
+		document, err := client.Document(ctx, selected.DocumentURL)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(os.Stdout, document)
+		return err
 	}
 
 	data, err := client.Facts(ctx, cik)
@@ -407,4 +471,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
