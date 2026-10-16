@@ -1,4 +1,4 @@
-package main
+package sec
 
 import (
 	"context"
@@ -8,11 +8,13 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const secBase = "https://data.sec.gov"
+const tickerURL = "https://www.sec.gov/files/company_tickers.json"
 
 type Client struct {
 	http      *http.Client
@@ -98,6 +100,35 @@ func (c *Client) Get(
 	}
 
 	return fmt.Errorf("request failed after retries: %w", lastErr)
+}
+
+// ResolveTicker looks up a ticker in the SEC's company ticker mapping and
+// returns its zero-padded CIK.
+func (c *Client) ResolveTicker(ctx context.Context, ticker string) (string, error) {
+	ticker = strings.ToUpper(strings.TrimSpace(ticker))
+	if ticker == "" {
+		return "", fmt.Errorf("ticker cannot be empty")
+	}
+	var entries map[string]struct {
+		CIK    int    `json:"cik_str"`
+		Ticker string `json:"ticker"`
+	}
+	if err := c.Get(ctx, tickerURL, &entries); err != nil {
+		return "", fmt.Errorf("look up ticker %q: %w", ticker, err)
+	}
+	var match string
+	for _, entry := range entries {
+		if strings.EqualFold(entry.Ticker, ticker) {
+			if match != "" && match != strconv.Itoa(entry.CIK) {
+				return "", fmt.Errorf("ticker %q matches multiple companies", ticker)
+			}
+			match = strconv.Itoa(entry.CIK)
+		}
+	}
+	if match == "" {
+		return "", fmt.Errorf("ticker %q not found in SEC company list", ticker)
+	}
+	return NormalizeCIK(match)
 }
 
 func (c *Client) Submissions(

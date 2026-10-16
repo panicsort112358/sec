@@ -1,4 +1,4 @@
-package main
+package sec
 
 import (
 	"fmt"
@@ -73,7 +73,7 @@ type FinancialFact struct {
 
 var validCIK = regexp.MustCompile(`^[0-9]{1,10}$`)
 
-func normalizeCIK(raw string) (string, error) {
+func NormalizeCIK(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if !validCIK.MatchString(raw) {
 		return "", fmt.Errorf("invalid CIK %q", raw)

@@ -8,7 +8,31 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"sec/internal/sec"
 )
+
+const usage = `usage: sec [options]
+
+modes:
+  filings     list company filings
+  document    print a filing document as text
+  facts       list extracted XBRL facts
+
+options:
+  -ticker string       company ticker symbol, e.g. AAPL
+  -mode string         filings, document, or facts (default "filings")
+  -accession string    accession number for document mode
+  -form string         optional form filter, e.g. 10-K or 10-Q
+  -limit int           maximum output records; 0 means unlimited (default 20)
+  -ua string           descriptive User-Agent including contact email (default SEC_USER_AGENT)
+
+examples:
+  sec -ticker AAPL -mode filings -form 10-K
+  sec -ticker AAPL -mode document -form 10-K
+  sec -ticker AAPL -mode document -accession 0000320193-24-000123
+  sec -ticker AAPL -mode facts -form 10-K
+`
 
 func writeJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
@@ -18,21 +42,13 @@ func writeJSON(v any) error {
 
 func run() error {
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s -cik CIK [options]\n\n", os.Args[0])
-		fmt.Fprintln(flag.CommandLine.Output(), "Read SEC company filings, filing documents, or XBRL facts.")
-		fmt.Fprintln(flag.CommandLine.Output(), "Set SEC_USER_AGENT or pass -ua with a descriptive agent and contact email.\n")
-		fmt.Fprintln(flag.CommandLine.Output(), "Examples:")
-		fmt.Fprintf(flag.CommandLine.Output(), "  %s -cik 320193 -mode filings -form 10-K\n", os.Args[0])
-		fmt.Fprintf(flag.CommandLine.Output(), "  %s -cik 320193 -mode document -form 10-K\n", os.Args[0])
-		fmt.Fprintf(flag.CommandLine.Output(), "  %s -cik 320193 -mode document -accession 0000320193-24-000123\n", os.Args[0])
-		fmt.Fprintf(flag.CommandLine.Output(), "  %s -cik 320193 -mode facts -form 10-K\n\n", os.Args[0])
-		fmt.Fprintln(flag.CommandLine.Output(), "Options:")
-		flag.PrintDefaults()
+		fmt.Fprint(flag.CommandLine.Output(), usage)
+		fmt.Fprintln(flag.CommandLine.Output(), "Set SEC_USER_AGENT to a descriptive agent with contact email, or pass -ua.")
 	}
 	flag.CommandLine.SetOutput(os.Stderr)
 	flag.CommandLine.Usage = flag.Usage
-	cikFlag := flag.String(
-		"cik", "", "SEC Central Index Key, e.g. 320193",
+	tickerFlag := flag.String(
+		"ticker", "", "company ticker symbol, e.g. AAPL",
 	)
 	mode := flag.String(
 		"mode", "filings", "filings, document, or facts",
@@ -50,9 +66,9 @@ func run() error {
 	)
 	flag.Parse()
 
-	if *cikFlag == "" {
+	if *tickerFlag == "" {
 		flag.Usage()
-		return errors.New("provide -cik")
+		return errors.New("provide -ticker")
 	}
 	if *agent == "" {
 		return errors.New(
@@ -67,17 +83,16 @@ func run() error {
 		return errors.New("-mode must be filings, document, or facts")
 	}
 
-	cik, err := normalizeCIK(*cikFlag)
-	if err != nil {
-		return err
-	}
-
 	ctx, cancel := context.WithTimeout(
 		context.Background(), 90*time.Second,
 	)
 	defer cancel()
 
-	client := NewClient(*agent)
+	client := sec.NewClient(*agent)
+	cik, err := client.ResolveTicker(ctx, *tickerFlag)
+	if err != nil {
+		return err
+	}
 
 	if *mode == "filings" || *mode == "document" {
 		data, err := client.Submissions(ctx, cik)
@@ -85,10 +100,10 @@ func run() error {
 			return err
 		}
 		if *mode == "filings" {
-			return writeJSON(ExtractFilings(data, cik, *form, *limit))
+			return writeJSON(sec.ExtractFilings(data, cik, *form, *limit))
 		}
-		filings := ExtractFilings(data, cik, *form, 0)
-		var selected *Filing
+		filings := sec.ExtractFilings(data, cik, *form, 0)
+		var selected *sec.Filing
 		for i := range filings {
 			if *accession == "" || filings[i].AccessionNumber == *accession {
 				selected = &filings[i]
@@ -110,7 +125,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	return writeJSON(ExtractFacts(
+	return writeJSON(sec.ExtractFacts(
 		data, cik, *form, *limit,
 	))
 }
