@@ -9,34 +9,58 @@ import (
 	"strconv"
 	"strings"
 
-	"sec/internal/psql"
+	"sec/internal/sqlite"
 )
 
-// LoadModelFromPostgres reads one model and its ordered forecast rows by using
-// the psql client. This keeps the Go module dependency-free.
-func LoadModelFromPostgres(ctx context.Context, dsn string, id int64) (Model, error) {
+// ModelIDs returns all stored model IDs in ascending order.
+func ModelIDs(ctx context.Context, path, ticker string) ([]int64, error) {
+	query := fmt.Sprintf("SELECT id FROM dcf_models WHERE upper(ticker) = upper(%s) ORDER BY id;\n", quote(ticker))
+	output, err := sqlite.Run(ctx, path, query)
+	if err != nil {
+		return nil, fmt.Errorf("list DCF models: %w", err)
+	}
+	rows, err := parseCSV(output)
+	if err != nil {
+		return nil, fmt.Errorf("parse DCF model IDs: %w", err)
+	}
+	ids := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if len(row) != 1 {
+			return nil, fmt.Errorf("DCF model ID row has %d fields; expected 1", len(row))
+		}
+		id, err := strconv.ParseInt(strings.TrimSpace(row[0]), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse DCF model ID %q: %w", row[0], err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// LoadModelFromSQLite reads a model and its ordered forecast rows.
+func LoadModelFromSQLite(ctx context.Context, path string, id int64) (Model, error) {
 	var model Model
 	modelSQL := fmt.Sprintf(`SELECT
-    to_char(valuation_date, 'YYYY-MM-DD'),
-    initial_revenue::text,
-    initial_operating_nwc_rate::text,
-    COALESCE(wacc::text, ''),
-    COALESCE(risk_free_rate::text, ''),
-    COALESCE(levered_beta::text, ''),
-    COALESCE(equity_risk_premium::text, ''),
-    COALESCE(pre_tax_cost_of_debt::text, ''),
-    COALESCE(capm_tax_rate::text, ''),
-    COALESCE(market_equity_value::text, ''),
-    COALESCE(market_debt_value::text, ''),
-    terminal_growth_rate::text,
-    stable_roic::text,
-    excess_cash::text,
-    non_operating_assets::text,
-    debt::text,
-    other_senior_claims::text,
-    diluted_shares::text
+    strftime('%Y-%m-%d', valuation_date),
+    CAST(initial_revenue AS TEXT),
+    CAST(initial_operating_nwc_rate AS TEXT),
+    COALESCE(CAST(wacc AS TEXT), ''),
+    COALESCE(CAST(risk_free_rate AS TEXT), ''),
+    COALESCE(CAST(levered_beta AS TEXT), ''),
+    COALESCE(CAST(equity_risk_premium AS TEXT), ''),
+    COALESCE(CAST(pre_tax_cost_of_debt AS TEXT), ''),
+    COALESCE(CAST(capm_tax_rate AS TEXT), ''),
+    COALESCE(CAST(market_equity_value AS TEXT), ''),
+    COALESCE(CAST(market_debt_value AS TEXT), ''),
+    CAST(terminal_growth_rate AS TEXT),
+    CAST(stable_roic AS TEXT),
+    CAST(excess_cash AS TEXT),
+    CAST(non_operating_assets AS TEXT),
+    CAST(debt AS TEXT),
+    CAST(other_senior_claims AS TEXT),
+    CAST(diluted_shares AS TEXT)
 FROM dcf_models WHERE id = %d;`, id)
-	output, err := psql.Run(ctx, dsn, modelSQL)
+	output, err := sqlite.Run(ctx, path, modelSQL)
 	if err != nil {
 		return model, fmt.Errorf("load DCF model %d: %w", id, err)
 	}
@@ -106,12 +130,12 @@ FROM dcf_models WHERE id = %d;`, id)
 	}
 
 	forecastSQL := fmt.Sprintf(`SELECT
-    COALESCE(to_char(cash_flow_date, 'YYYY-MM-DD'), ''),
-    revenue_growth::text, ebit_margin::text, cash_tax_rate::text,
-    da_as_pct_revenue::text, capex_as_pct_revenue::text,
-    operating_nwc_as_pct_revenue::text
+    COALESCE(strftime('%Y-%m-%d', cash_flow_date), ''),
+    CAST(revenue_growth AS TEXT), CAST(ebit_margin AS TEXT), CAST(cash_tax_rate AS TEXT),
+    CAST(da_as_pct_revenue AS TEXT), CAST(capex_as_pct_revenue AS TEXT),
+    CAST(operating_nwc_as_pct_revenue AS TEXT)
 FROM dcf_forecast_years WHERE model_id = %d ORDER BY forecast_index;`, id)
-	output, err = psql.Run(ctx, dsn, forecastSQL)
+	output, err = sqlite.Run(ctx, path, forecastSQL)
 	if err != nil {
 		return model, fmt.Errorf("load DCF forecast %d: %w", id, err)
 	}
@@ -136,9 +160,8 @@ FROM dcf_forecast_years WHERE model_id = %d ORDER BY forecast_index;`, id)
 	return model, nil
 }
 
-// SaveResultToPostgres records a valuation and its annual forecast output in a
-// single transaction, returning the generated valuation ID.
-func SaveResultToPostgres(ctx context.Context, dsn string, modelID int64, result Result) (int64, error) {
+// SaveResultToSQLite records a valuation and its forecast rows in one transaction.
+func SaveResultToSQLite(ctx context.Context, path string, modelID int64, result Result) (int64, error) {
 	var sql strings.Builder
 	sql.WriteString("BEGIN;\n")
 	fmt.Fprintf(&sql, `INSERT INTO dcf_valuations (
@@ -146,26 +169,29 @@ func SaveResultToPostgres(ctx context.Context, dsn string, modelID int64, result
     terminal_reinvestment, terminal_fcff, terminal_value,
     pv_explicit_fcff, pv_terminal_value, enterprise_value,
     equity_value, value_per_share
-) VALUES (%d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-RETURNING id AS valuation_id \gset
+) VALUES (%d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+SELECT last_insert_rowid();
 `, modelID, number(result.WACC), nullableNumber(result.CostOfEquity), quote(result.TerminalDate), number(result.NextNOPAT), number(result.TerminalReinvestment), number(result.TerminalFCFF), number(result.TerminalValue), number(result.PVExplicitFCFF), number(result.PVTerminalValue), number(result.EnterpriseValue), number(result.EquityValue), nullableNumber(result.ValuePerShare))
 	for i, year := range result.Forecast {
 		fmt.Fprintf(&sql, `INSERT INTO dcf_valuation_years (
     valuation_id, forecast_index, cash_flow_date, years_from_valuation,
     revenue, ebit, nopat, da, capex, change_nwc, fcff, present_value
-) VALUES (:valuation_id, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+) VALUES ((SELECT MAX(id) FROM dcf_valuations), %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
 `, i+1, quote(year.Date), number(year.YearsFromValuation), number(year.Revenue), number(year.EBIT), number(year.NOPAT), number(year.DA), number(year.Capex), number(year.ChangeNWC), number(year.FCFF), number(year.PresentValue))
 	}
-	sql.WriteString("COMMIT;\nSELECT :valuation_id;\n")
-	output, err := psql.Run(ctx, dsn, sql.String())
+	sql.WriteString("COMMIT;\n")
+	output, err := sqlite.Run(ctx, path, sql.String())
 	if err != nil {
 		return 0, fmt.Errorf("save DCF valuation: %w", err)
 	}
-	lines := strings.Fields(string(output))
-	if len(lines) == 0 {
-		return 0, fmt.Errorf("PostgreSQL did not return a valuation ID")
+	rows, err := parseCSV(output)
+	if err != nil {
+		return 0, fmt.Errorf("parse returned valuation ID: %w", err)
 	}
-	id, err := strconv.ParseInt(lines[len(lines)-1], 10, 64)
+	if len(rows) == 0 || len(rows[0]) != 1 {
+		return 0, fmt.Errorf("SQLite did not return a valuation ID")
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(rows[0][0]), 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("parse returned valuation ID: %w", err)
 	}

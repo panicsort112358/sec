@@ -9,9 +9,13 @@ This repository implements an assumptions-driven enterprise DCF in
 [`internal/dcf/model.go`](internal/dcf/model.go). It keeps the financial
 calculation separate from SEC data retrieval: reported facts can inform the
 starting point and assumptions, while the user supplies the forecast and
-market-based inputs. Build and run it through the standalone `dcf` executable
-with `go build -o dcf ./cmd/dcf` and `./dcf -model-id 42`. The command reads
-model assumptions from PostgreSQL and saves each valuation run there.
+market-based inputs. The `sec` command fetches selected historical XBRL facts
+that can inform revenue, operating performance, reinvestment, and the equity
+bridge; it does not derive forecast growth, margins, WACC, or terminal inputs.
+Build and run the model through the standalone `dcf` executable with
+`go build -o dcf ./cmd/dcf` and `./dcf --ticker AAPL`. The command reads each
+model associated with that ticker and its forecast from `sec.db` by default,
+then saves each valuation run back into that database.
 
 ## 1. From operations to free cash flow
 

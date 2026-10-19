@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -11,49 +12,71 @@ import (
 	"sec/internal/dcf"
 )
 
-const usage = `usage: dcf [options]
+const usage = `usage: dcf --ticker SYMBOL [options]
 
-Calculate a stored DCF model and save its valuation to PostgreSQL.
+Calculate stored DCF models for one ticker and append their valuations to the
+SQLite database, which contains SEC data, dcf_models and forecast rows.
 
 options:
-  -model-id int   ID of the model in dcf_models (required)
-  -dsn string     PostgreSQL connection string (default DATABASE_URL or libpq environment)
-
-examples:
-  dcf -model-id 42
-  dcf -model-id 42 -dsn 'postgres://user@localhost/research?sslmode=disable'
+  -ticker string   company ticker symbol (required)
+  -db string       SQLite database file (default SEC_DATABASE_PATH or sec.db)
 `
 
 func run() error {
-	modelID := flag.Int64("model-id", 0, "ID of the model in dcf_models")
-	dsn := flag.String("dsn", os.Getenv("DATABASE_URL"), "PostgreSQL connection string")
+	ticker := flag.String("ticker", "", "company ticker symbol")
+	database := flag.String("db", envOr("SEC_DATABASE_PATH", "sec.db"), "SQLite database file")
 	flag.Usage = func() { fmt.Fprint(flag.CommandLine.Output(), usage) }
 	flag.CommandLine.SetOutput(os.Stderr)
 	flag.Parse()
-	if *modelID <= 0 {
-		return fmt.Errorf("provide a positive -model-id")
+	if *ticker == "" {
+		flag.Usage()
+		return errors.New("provide -ticker")
+	}
+	if flag.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	model, err := dcf.LoadModelFromPostgres(ctx, *dsn, *modelID)
+	modelIDs, err := dcf.ModelIDs(ctx, *database, *ticker)
 	if err != nil {
 		return err
 	}
-	result, err := dcf.Calculate(model)
-	if err != nil {
-		return err
+	if len(modelIDs) == 0 {
+		return fmt.Errorf("no DCF models found for ticker %s", *ticker)
 	}
-	valuationID, err := dcf.SaveResultToPostgres(ctx, *dsn, *modelID, result)
-	if err != nil {
-		return err
+
+	var failures []error
+	for _, modelID := range modelIDs {
+		model, err := dcf.LoadModelFromSQLite(ctx, *database, modelID)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("model %d: %w", modelID, err))
+			continue
+		}
+		result, err := dcf.Calculate(model)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("model %d: %w", modelID, err))
+			continue
+		}
+		valuationID, err := dcf.SaveResultToSQLite(ctx, *database, modelID, result)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("model %d: %w", modelID, err))
+			continue
+		}
+		fmt.Printf("valuation_id=%d model_id=%d ticker=%s enterprise_value=%s equity_value=%s", valuationID, modelID, *ticker, strconv.FormatFloat(result.EnterpriseValue, 'f', 2, 64), strconv.FormatFloat(result.EquityValue, 'f', 2, 64))
+		if result.ValuePerShare != nil {
+			fmt.Printf(" value_per_share=%s", strconv.FormatFloat(*result.ValuePerShare, 'f', 2, 64))
+		}
+		fmt.Println()
 	}
-	fmt.Printf("valuation_id=%d model_id=%d enterprise_value=%s equity_value=%s", valuationID, *modelID, strconv.FormatFloat(result.EnterpriseValue, 'f', 2, 64), strconv.FormatFloat(result.EquityValue, 'f', 2, 64))
-	if result.ValuePerShare != nil {
-		fmt.Printf(" value_per_share=%s", strconv.FormatFloat(*result.ValuePerShare, 'f', 2, 64))
+	return errors.Join(failures...)
+}
+
+func envOr(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
 	}
-	fmt.Println()
-	return nil
+	return fallback
 }
 
 func main() {

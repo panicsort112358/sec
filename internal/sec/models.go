@@ -138,21 +138,25 @@ var concepts = []string{
 	"RevenueFromContractWithCustomerExcludingAssessedTax",
 	"Revenues",
 	"SalesRevenueNet",
-	"NetIncomeLoss",
-	"Assets",
-	"Liabilities",
-	"StockholdersEquity",
-	"OperatingIncomeLoss",
-	"NetCashProvidedByUsedInOperatingActivities",
+	"AssetsCurrent",
+	"LiabilitiesCurrent",
 	"CashAndCashEquivalentsAtCarryingValue",
+	"ShortTermBorrowings",
+	"LongTermDebtCurrent",
+	"LongTermDebtNoncurrent",
+	"LongTermDebt",
+	"OperatingIncomeLoss",
+	"IncomeTaxExpenseBenefit",
+	"NetIncomeLoss",
+	"DepreciationDepletionAndAmortization",
+	"PaymentsToAcquirePropertyPlantAndEquipment",
+	"NetCashProvidedByUsedInOperatingActivities",
+	"StockholdersEquity",
+	"EntityCommonStockSharesOutstanding",
+	"WeightedAverageNumberOfDilutedSharesOutstanding",
 }
 
-func ExtractFacts(
-	data *CompanyFacts,
-	cik string,
-	form string,
-	limit int,
-) []FinancialFact {
+func ExtractFacts(data *CompanyFacts, cik string) []FinancialFact {
 	var out []FinancialFact
 
 	usgaap, ok := data.Facts["us-gaap"]
@@ -168,10 +172,9 @@ func ExtractFacts(
 
 		for unit, entries := range def.Units {
 			for _, e := range entries {
-				if form != "" && e.Form != form {
+				if !dcfFilingForm(e.Form) {
 					continue
 				}
-
 				out = append(out, FinancialFact{
 					Company:    data.Entity,
 					CIK:        cik,
@@ -200,9 +203,14 @@ func ExtractFacts(
 		return out[i].FilingDate > out[j].FilingDate
 	})
 
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-
 	return out
+}
+
+func dcfFilingForm(form string) bool {
+	switch form {
+	case "10-K", "10-Q", "20-F", "40-F", "6-K":
+		return true
+	default:
+		return false
+	}
 }
