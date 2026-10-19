@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +28,7 @@ func NewClient(userAgent string) *Client {
 	}
 }
 
-func (c *Client) Get(
+func (c *Client) get(
 	ctx context.Context,
 	url string,
 	dst any,
@@ -113,7 +111,7 @@ func (c *Client) ResolveTicker(ctx context.Context, ticker string) (string, erro
 		CIK    int    `json:"cik_str"`
 		Ticker string `json:"ticker"`
 	}
-	if err := c.Get(ctx, tickerURL, &entries); err != nil {
+	if err := c.get(ctx, tickerURL, &entries); err != nil {
 		return "", fmt.Errorf("look up ticker %q: %w", ticker, err)
 	}
 	var match string
@@ -131,18 +129,6 @@ func (c *Client) ResolveTicker(ctx context.Context, ticker string) (string, erro
 	return NormaliseCIK(match)
 }
 
-func (c *Client) Submissions(
-	ctx context.Context, cik string,
-) (*Submissions, error) {
-	var result Submissions
-	url := secBase + "/submissions/CIK" + cik + ".json"
-
-	if err := c.Get(ctx, url, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
-}
-
 func (c *Client) Facts(
 	ctx context.Context, cik string,
 ) (*CompanyFacts, error) {
@@ -150,54 +136,8 @@ func (c *Client) Facts(
 	url := secBase + "/api/xbrl/companyfacts/CIK" +
 		cik + ".json"
 
-	if err := c.Get(ctx, url, &result); err != nil {
+	if err := c.get(ctx, url, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
-}
-
-func (c *Client) Document(ctx context.Context, url string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", c.userAgent)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("SEC returned HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
-	if err != nil {
-		return "", err
-	}
-	return plainText(string(body)), nil
-}
-
-var (
-	scriptTags = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script\s*>`)
-	styleTags  = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style\s*>`)
-	ixHeaders  = regexp.MustCompile(`(?is)<ix:header\b[^>]*>.*?</ix:header\s*>`)
-	tags       = regexp.MustCompile(`(?s)<[^>]*>`)
-	spaces     = regexp.MustCompile(`[\t\r ]+`)
-	blankLines = regexp.MustCompile(`\n{3,}`)
-	breaks     = regexp.MustCompile(`(?i)<br\s*/?>|</(p|div|tr|h[1-6]|li|section)\s*>`)
-)
-
-func plainText(source string) string {
-	source = scriptTags.ReplaceAllString(source, " ")
-	source = styleTags.ReplaceAllString(source, " ")
-	source = ixHeaders.ReplaceAllString(source, " ")
-	source = breaks.ReplaceAllString(source, "\n")
-	source = tags.ReplaceAllString(source, " ")
-	source = html.UnescapeString(source)
-	lines := strings.Split(source, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimSpace(spaces.ReplaceAllString(line, " "))
-	}
-	return strings.TrimSpace(blankLines.ReplaceAllString(strings.Join(lines, "\n"), "\n\n"))
 }

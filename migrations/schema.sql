@@ -92,20 +92,6 @@ CREATE TABLE sec_companies (
     updated_at          text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE sec_filings (
-    cik                 char(10) NOT NULL REFERENCES sec_companies(cik) ON DELETE CASCADE,
-    accession_number    text NOT NULL,
-    company_name        text NOT NULL,
-    form                text NOT NULL,
-    filing_date         date NOT NULL,
-    report_date         date,
-    document_url        text NOT NULL,
-    saved_at            text NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (cik, accession_number)
-);
-
-CREATE INDEX sec_filings_by_date ON sec_filings (cik, filing_date DESC);
-
 CREATE TABLE sec_facts (
     cik                 char(10) NOT NULL REFERENCES sec_companies(cik) ON DELETE CASCADE,
     company_name        text NOT NULL,
@@ -128,13 +114,3 @@ CREATE TABLE sec_facts (
 );
 
 CREATE INDEX sec_facts_by_concept_period ON sec_facts (cik, concept, period_end DESC);
-
-CREATE TABLE sec_documents (
-    cik                 char(10) NOT NULL,
-    accession_number    text NOT NULL,
-    document_text       text NOT NULL,
-    fetched_at          text NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (cik, accession_number),
-    FOREIGN KEY (cik, accession_number)
-        REFERENCES sec_filings(cik, accession_number) ON DELETE CASCADE
-);

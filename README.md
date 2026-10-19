@@ -9,7 +9,9 @@ go build -o sec ./cmd/sec
 go build -o dcf ./cmd/dcf
 ```
 
-Both commands use the `sqlite3` command-line program, which must be on `PATH`.
+Both commands use the SQLite driver bundled with the Go program; they do not
+need the SQLite command-line tool. The command below uses `sqlite3` to apply
+the schema once.
 
 Before using `sec`, set `SEC_USER_AGENT` to a descriptive agent string with a
 contact email, or pass the same value with `-ua`.

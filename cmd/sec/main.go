@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"sec/internal/sec"
+	"sec/internal/sqlite"
 )
 
 const usage = `usage: sec -ticker SYMBOL [options]
@@ -23,7 +24,7 @@ options:
 
 func run() error {
 	ticker := flag.String("ticker", "", "company ticker symbol, e.g. AAPL")
-	database := flag.String("db", envOr("SEC_DATABASE_PATH", "sec.db"), "SQLite database file")
+	database := flag.String("db", sqlite.DefaultPath(), "SQLite database file")
 	userAgent := flag.String("ua", os.Getenv("SEC_USER_AGENT"), "SEC User-Agent including contact email")
 	flag.Usage = func() { fmt.Fprint(flag.CommandLine.Output(), usage) }
 	flag.CommandLine.SetOutput(os.Stderr)
@@ -55,13 +56,6 @@ func run() error {
 	}
 	fmt.Printf("saved_dcf_facts=%d ticker=%s cik=%s database=%s\n", len(facts), *ticker, cik, *database)
 	return nil
-}
-
-func envOr(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func main() {

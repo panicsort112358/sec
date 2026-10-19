@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"sec/internal/dcf"
+	"sec/internal/sqlite"
 )
 
 const usage = `usage: dcf -ticker SYMBOL [options]
@@ -24,7 +25,7 @@ options:
 
 func run() error {
 	ticker := flag.String("ticker", "", "company ticker symbol")
-	database := flag.String("db", envOr("SEC_DATABASE_PATH", "sec.db"), "SQLite database file")
+	database := flag.String("db", sqlite.DefaultPath(), "SQLite database file")
 	flag.Usage = func() { fmt.Fprint(flag.CommandLine.Output(), usage) }
 	flag.CommandLine.SetOutput(os.Stderr)
 	flag.Parse()
@@ -38,45 +39,58 @@ func run() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	modelIDs, err := dcf.ModelIDs(ctx, *database, *ticker)
+	models, err := dcf.LoadModels(ctx, *database, *ticker)
 	if err != nil {
 		return err
 	}
-	if len(modelIDs) == 0 {
+	if len(models) == 0 {
 		return fmt.Errorf("no DCF models found for ticker %s", *ticker)
 	}
 
+	var valuations []dcf.Valuation
 	var failures []error
-	for _, modelID := range modelIDs {
-		model, err := dcf.LoadModelFromSQLite(ctx, *database, modelID)
+	for _, model := range models {
+		valuation, err := calculateModel(model)
 		if err != nil {
-			failures = append(failures, fmt.Errorf("model %d: %w", modelID, err))
+			failures = append(failures, err)
 			continue
 		}
-		result, err := dcf.Calculate(model)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("model %d: %w", modelID, err))
-			continue
-		}
-		valuationID, err := dcf.SaveResultToSQLite(ctx, *database, modelID, result)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("model %d: %w", modelID, err))
-			continue
-		}
-		fmt.Printf("valuation_id=%d model_id=%d ticker=%s enterprise_value=%s equity_value=%s", valuationID, modelID, *ticker, strconv.FormatFloat(result.EnterpriseValue, 'f', 2, 64), strconv.FormatFloat(result.EquityValue, 'f', 2, 64))
-		if result.ValuePerShare != nil {
-			fmt.Printf(" value_per_share=%s", strconv.FormatFloat(*result.ValuePerShare, 'f', 2, 64))
-		}
-		fmt.Println()
+		valuations = append(valuations, valuation)
+	}
+
+	saved, err := dcf.SaveResults(ctx, *database, valuations)
+	if err != nil {
+		failures = append(failures, err)
+		return errors.Join(failures...)
+	}
+	for i, valuation := range valuations {
+		printResult(saved[i].ValuationID, valuation.ModelID, *ticker, valuation.Result)
 	}
 	return errors.Join(failures...)
 }
 
-func envOr(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+func calculateModel(model dcf.StoredModel) (dcf.Valuation, error) {
+	result, err := dcf.Calculate(model.Model)
+	if err != nil {
+		return dcf.Valuation{}, fmt.Errorf("model %d: %w", model.ID, err)
 	}
-	return fallback
+	return dcf.Valuation{ModelID: model.ID, Result: result}, nil
+}
+
+func printResult(valuationID, modelID int64, ticker string, result dcf.Result) {
+	fmt.Printf(
+		"valuation_id=%d model_id=%d ticker=%s enterprise_value=%s equity_value=%s",
+		valuationID, modelID, ticker,
+		money(result.EnterpriseValue), money(result.EquityValue),
+	)
+	if result.ValuePerShare != nil {
+		fmt.Printf(" value_per_share=%s", money(*result.ValuePerShare))
+	}
+	fmt.Println()
+}
+
+func money(value float64) string {
+	return strconv.FormatFloat(value, 'f', 2, 64)
 }
 
 func main() {

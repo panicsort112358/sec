@@ -7,33 +7,6 @@ import (
 	"strings"
 )
 
-type Submissions struct {
-	Name    string   `json:"name"`
-	CIK     string   `json:"cik"`
-	Tickers []string `json:"tickers"`
-	Filings struct {
-		Recent RecentFilings `json:"recent"`
-	} `json:"filings"`
-}
-
-type RecentFilings struct {
-	AccessionNumber []string `json:"accessionNumber"`
-	Form            []string `json:"form"`
-	FilingDate      []string `json:"filingDate"`
-	ReportDate      []string `json:"reportDate"`
-	PrimaryDocument []string `json:"primaryDocument"`
-}
-
-type Filing struct {
-	Company         string `json:"company"`
-	CIK             string `json:"cik"`
-	Form            string `json:"form"`
-	FilingDate      string `json:"filing_date"`
-	ReportDate      string `json:"report_date,omitempty"`
-	AccessionNumber string `json:"accession_number"`
-	DocumentURL     string `json:"document_url"`
-}
-
 type FactEntry struct {
 	Accession string  `json:"accn"`
 	End       string  `json:"end"`
@@ -79,59 +52,6 @@ func NormaliseCIK(raw string) (string, error) {
 		return "", fmt.Errorf("invalid CIK %q", raw)
 	}
 	return strings.Repeat("0", 10-len(raw)) + raw, nil
-}
-
-func ExtractFilings(
-	s *Submissions,
-	cik, form string,
-	limit int,
-) []Filing {
-	r := s.Filings.Recent
-	var out []Filing
-
-	for i, f := range r.Form {
-		if form != "" && f != form {
-			continue
-		}
-		if i >= len(r.AccessionNumber) ||
-			i >= len(r.FilingDate) ||
-			i >= len(r.PrimaryDocument) {
-			continue
-		}
-
-		acc := r.AccessionNumber[i]
-		pathAcc := strings.ReplaceAll(acc, "-", "")
-		doc := r.PrimaryDocument[i]
-
-		if doc == "" || strings.Contains(doc, "/") ||
-			strings.Contains(doc, "\\") {
-			continue
-		}
-
-		reportDate := ""
-		if i < len(r.ReportDate) {
-			reportDate = r.ReportDate[i]
-		}
-
-		out = append(out, Filing{
-			Company:         s.Name,
-			CIK:             cik,
-			Form:            f,
-			FilingDate:      r.FilingDate[i],
-			ReportDate:      reportDate,
-			AccessionNumber: acc,
-			DocumentURL: fmt.Sprintf(
-				"https://www.sec.gov/Archives/edgar/data/%s/%s/%s",
-				strings.TrimLeft(cik, "0"), pathAcc, doc,
-			),
-		})
-
-		if limit > 0 && len(out) >= limit {
-			break
-		}
-	}
-
-	return out
 }
 
 var concepts = []string{
