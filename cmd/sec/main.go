@@ -2,48 +2,37 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"time"
 
-	"sec/internal/dcf"
 	"sec/internal/sec"
+	"sec/internal/secstore"
 )
 
 const usage = `usage: sec [options]
 
 modes:
-  filings     list company filings
-  document    print a filing document as text
-  facts       list extracted XBRL facts
-  dcf         calculate an assumptions-driven DCF from JSON
-
+  filings     fetch and save company filings
+  document    fetch and save a filing document
+  facts       fetch and save extracted XBRL facts
 options:
   -ticker string       company ticker symbol, e.g. AAPL
-  -mode string         filings, document, facts, or dcf (default "filings")
+  -mode string         filings, document, or facts (default "filings")
   -accession string    accession number for document mode
   -form string         optional form filter, e.g. 10-K or 10-Q
   -limit int           maximum output records; 0 means unlimited (default 20)
   -ua string           descriptive User-Agent including contact email (default SEC_USER_AGENT)
-  -input string        DCF JSON file, or - for stdin (default -)
+  -dsn string          PostgreSQL connection string (default DATABASE_URL or libpq environment)
 
 examples:
   sec -ticker AAPL -mode filings -form 10-K
   sec -ticker AAPL -mode document -form 10-K
   sec -ticker AAPL -mode document -accession 0000320193-24-000123
   sec -ticker AAPL -mode facts -form 10-K
-  sec -mode dcf -input model.json
 `
-
-func writeJSON(v any) error {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
-}
 
 func run() error {
 	flag.Usage = func() {
@@ -55,10 +44,7 @@ func run() error {
 	tickerFlag := flag.String(
 		"ticker", "", "company ticker symbol, e.g. AAPL",
 	)
-	mode := flag.String(
-		"mode", "filings", "filings, document, facts, or dcf",
-	)
-	input := flag.String("input", "-", "DCF JSON file, or - for stdin")
+	mode := flag.String("mode", "filings", "filings, document, or facts")
 	accession := flag.String("accession", "", "accession number for document mode")
 	form := flag.String(
 		"form", "", "optional form filter, e.g. 10-K or 10-Q",
@@ -70,13 +56,14 @@ func run() error {
 		"ua", os.Getenv("SEC_USER_AGENT"),
 		"descriptive User-Agent including contact email",
 	)
+	dsn := flag.String("dsn", os.Getenv("DATABASE_URL"), "PostgreSQL connection string")
 	flag.Parse()
 
-	if *mode != "dcf" && *tickerFlag == "" {
+	if *tickerFlag == "" {
 		flag.Usage()
 		return errors.New("provide -ticker")
 	}
-	if *mode != "dcf" && *agent == "" {
+	if *agent == "" {
 		return errors.New(
 			"provide -ua 'Research App contact@example.com' " +
 				"or set SEC_USER_AGENT",
@@ -85,34 +72,8 @@ func run() error {
 	if *limit < 0 {
 		return errors.New("-limit cannot be negative")
 	}
-	if *mode != "filings" && *mode != "document" && *mode != "facts" && *mode != "dcf" {
-		return errors.New("-mode must be filings, document, facts, or dcf")
-	}
-	if *mode == "dcf" {
-		var reader io.Reader = os.Stdin
-		if *input != "-" {
-			file, err := os.Open(*input)
-			if err != nil {
-				return fmt.Errorf("open DCF input: %w", err)
-			}
-			defer file.Close()
-			reader = file
-		}
-		var model dcf.Model
-		decoder := json.NewDecoder(reader)
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&model); err != nil {
-			return fmt.Errorf("decode DCF model: %w", err)
-		}
-		var trailing any
-		if err := decoder.Decode(&trailing); err != io.EOF {
-			return errors.New("DCF input must contain exactly one JSON value")
-		}
-		result, err := dcf.Calculate(model)
-		if err != nil {
-			return err
-		}
-		return writeJSON(result)
+	if *mode != "filings" && *mode != "document" && *mode != "facts" {
+		return errors.New("-mode must be filings, document, or facts")
 	}
 
 	ctx, cancel := context.WithTimeout(
@@ -132,7 +93,12 @@ func run() error {
 			return err
 		}
 		if *mode == "filings" {
-			return writeJSON(sec.ExtractFilings(data, cik, *form, *limit))
+			filings := sec.ExtractFilings(data, cik, *form, *limit)
+			if err := secstore.SaveFilings(ctx, *dsn, *tickerFlag, filings); err != nil {
+				return err
+			}
+			fmt.Printf("saved_filings=%d ticker=%s cik=%s\n", len(filings), *tickerFlag, cik)
+			return nil
 		}
 		filings := sec.ExtractFilings(data, cik, *form, 0)
 		var selected *sec.Filing
@@ -149,17 +115,23 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		_, err = fmt.Fprintln(os.Stdout, document)
-		return err
+		if err := secstore.SaveDocument(ctx, *dsn, *tickerFlag, *selected, document); err != nil {
+			return err
+		}
+		fmt.Printf("saved_document=true ticker=%s cik=%s accession=%s characters=%d\n", *tickerFlag, cik, selected.AccessionNumber, len(document))
+		return nil
 	}
 
 	data, err := client.Facts(ctx, cik)
 	if err != nil {
 		return err
 	}
-	return writeJSON(sec.ExtractFacts(
-		data, cik, *form, *limit,
-	))
+	facts := sec.ExtractFacts(data, cik, *form, *limit)
+	if err := secstore.SaveFacts(ctx, *dsn, *tickerFlag, facts); err != nil {
+		return err
+	}
+	fmt.Printf("saved_facts=%d ticker=%s cik=%s\n", len(facts), *tickerFlag, cik)
+	return nil
 }
 
 func main() {
