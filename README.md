@@ -17,7 +17,7 @@ contact email, or pass the same value with `-ua`.
 `sec` stores SEC data in `sec.db` by default. Choose another file with
 `-db path/to/file.db` or `SEC_DATABASE_PATH`.
 
-Initialize the SEC and DCF tables in the same SQLite file before first use:
+Initialise the SEC and DCF tables in the same SQLite file before first use:
 
 ```sh
 sqlite3 sec.db < migrations/schema.sql
@@ -42,7 +42,7 @@ the same ticker.
 Run valuations for every stored model and append them to that same database:
 
 ```sh
-./dcf --ticker AAPL
+./dcf -ticker AAPL
 ```
 
 `dcf` uses the same `sec.db` default as `sec`. Set `SEC_DATABASE_PATH` or

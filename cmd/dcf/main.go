@@ -12,7 +12,7 @@ import (
 	"sec/internal/dcf"
 )
 
-const usage = `usage: dcf --ticker SYMBOL [options]
+const usage = `usage: dcf -ticker SYMBOL [options]
 
 Calculate stored DCF models for one ticker and append their valuations to the
 SQLite database, which contains SEC data, dcf_models and forecast rows.

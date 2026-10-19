@@ -128,7 +128,7 @@ func (c *Client) ResolveTicker(ctx context.Context, ticker string) (string, erro
 	if match == "" {
 		return "", fmt.Errorf("ticker %q not found in SEC company list", ticker)
 	}
-	return NormalizeCIK(match)
+	return NormaliseCIK(match)
 }
 
 func (c *Client) Submissions(
