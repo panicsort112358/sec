@@ -6,9 +6,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
+	"sec/internal/dcf"
 	"sec/internal/sec"
 )
 
@@ -18,20 +20,23 @@ modes:
   filings     list company filings
   document    print a filing document as text
   facts       list extracted XBRL facts
+  dcf         calculate an assumptions-driven DCF from JSON
 
 options:
   -ticker string       company ticker symbol, e.g. AAPL
-  -mode string         filings, document, or facts (default "filings")
+  -mode string         filings, document, facts, or dcf (default "filings")
   -accession string    accession number for document mode
   -form string         optional form filter, e.g. 10-K or 10-Q
   -limit int           maximum output records; 0 means unlimited (default 20)
   -ua string           descriptive User-Agent including contact email (default SEC_USER_AGENT)
+  -input string        DCF JSON file, or - for stdin (default -)
 
 examples:
   sec -ticker AAPL -mode filings -form 10-K
   sec -ticker AAPL -mode document -form 10-K
   sec -ticker AAPL -mode document -accession 0000320193-24-000123
   sec -ticker AAPL -mode facts -form 10-K
+  sec -mode dcf -input model.json
 `
 
 func writeJSON(v any) error {
@@ -51,8 +56,9 @@ func run() error {
 		"ticker", "", "company ticker symbol, e.g. AAPL",
 	)
 	mode := flag.String(
-		"mode", "filings", "filings, document, or facts",
+		"mode", "filings", "filings, document, facts, or dcf",
 	)
+	input := flag.String("input", "-", "DCF JSON file, or - for stdin")
 	accession := flag.String("accession", "", "accession number for document mode")
 	form := flag.String(
 		"form", "", "optional form filter, e.g. 10-K or 10-Q",
@@ -66,11 +72,11 @@ func run() error {
 	)
 	flag.Parse()
 
-	if *tickerFlag == "" {
+	if *mode != "dcf" && *tickerFlag == "" {
 		flag.Usage()
 		return errors.New("provide -ticker")
 	}
-	if *agent == "" {
+	if *mode != "dcf" && *agent == "" {
 		return errors.New(
 			"provide -ua 'Research App contact@example.com' " +
 				"or set SEC_USER_AGENT",
@@ -79,8 +85,34 @@ func run() error {
 	if *limit < 0 {
 		return errors.New("-limit cannot be negative")
 	}
-	if *mode != "filings" && *mode != "document" && *mode != "facts" {
-		return errors.New("-mode must be filings, document, or facts")
+	if *mode != "filings" && *mode != "document" && *mode != "facts" && *mode != "dcf" {
+		return errors.New("-mode must be filings, document, facts, or dcf")
+	}
+	if *mode == "dcf" {
+		var reader io.Reader = os.Stdin
+		if *input != "-" {
+			file, err := os.Open(*input)
+			if err != nil {
+				return fmt.Errorf("open DCF input: %w", err)
+			}
+			defer file.Close()
+			reader = file
+		}
+		var model dcf.Model
+		decoder := json.NewDecoder(reader)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&model); err != nil {
+			return fmt.Errorf("decode DCF model: %w", err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return errors.New("DCF input must contain exactly one JSON value")
+		}
+		result, err := dcf.Calculate(model)
+		if err != nil {
+			return err
+		}
+		return writeJSON(result)
 	}
 
 	ctx, cancel := context.WithTimeout(
