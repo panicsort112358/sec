@@ -34,3 +34,5 @@ go.work.sum
 
 sec
 dcf
+!internal/dcf/
+!internal/dcf/*.go

@@ -67,6 +67,7 @@ var concepts = []string{
 	"LongTermDebt",
 	"OperatingIncomeLoss",
 	"IncomeTaxExpenseBenefit",
+	"IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
 	"NetIncomeLoss",
 	"DepreciationDepletionAndAmortization",
 	"PaymentsToAcquirePropertyPlantAndEquipment",

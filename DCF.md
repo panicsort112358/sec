@@ -48,7 +48,7 @@ profit without being a current-period cash payment. Capital expenditure is
 subtracted because it is cash invested in long-lived assets. An increase in
 operating net working capital also consumes cash; a decrease releases it.
 
-For each forecast step, D&A, CapEx, and operating NWC are modeled as a
+For each forecast step, D&A, CapEx, and operating NWC are modelled as a
 percentage of revenue. The change in working capital is measured against the
 prior period. The first step uses `initial_operating_nwc_as_pct_revenue` to
 estimate that prior-period balance.
@@ -136,7 +136,7 @@ $$
                       - \text{Debt} - \text{Other Senior Claims}
 $$
 
-The bridge adds assets not needed to generate the modeled operating cash
+The bridge adds assets not needed to generate the modelled operating cash
 flows and subtracts claims senior to common equity. This classification must
 be consistent with the cash flows: do not include an asset in operating value
 and add it again here, or subtract the same liability twice.
@@ -164,3 +164,50 @@ then make explicit judgments about future growth, margins, reinvestment,
 taxes, and risk. Because terminal value can be a large share of total value,
 small changes to WACC, perpetual growth, or stable ROIC can materially change
 the result.
+
+## 6. Representing uncertainty
+
+A more advanced model treats key assumptions as probability distributions
+rather than fixed values. Each simulation draws a plausible set of inputs
+$\theta^{(k)}$ and calculates a valuation:
+
+$$
+EV^{(k)} = DCF(\theta^{(k)})
+$$
+
+Repeating this thousands of times produces a distribution of valuations. The
+modeller can examine its median, percentiles, downside risk, or the probability
+that value falls below a chosen threshold.
+
+The assumptions should retain their economic relationships. Revenue growth,
+margins, reinvestment, and ROIC are related; sampling each independently can
+create implausible combinations. Monte Carlo analysis quantifies the
+uncertainty encoded in the chosen assumptions and distributions. It does not
+reveal the unknown probability distribution of true intrinsic value.
+
+The standard stored-model command calculates each model using fixed
+assumptions. Neither that path nor reverse DCF samples assumption
+distributions or runs Monte Carlo simulations.
+
+## 7. Reverse DCF: growth implied by a share price
+
+Run `./dcf -ticker AAPL -price 250` to solve for the constant annual FCFF
+growth rate that makes the model's equity value match the supplied share
+price. The command uses up to three recent annual filing periods to derive a
+normalized starting FCFF, then calculates implied growth across a range of
+WACC assumptions. The price, WACC range, forecast horizon, valuation date,
+and terminal growth can be supplied with command-line flags.
+
+The starting FCFF is calculated from reported operating income, tax expense,
+D&A, capital expenditure, and the change in an operating working-capital
+proxy. The proxy is current assets less cash and current liabilities excluding
+current debt. The equity bridge uses cash, debt, and the latest reported
+quarterly weighted-average diluted shares when available (otherwise annual
+diluted shares). These are practical approximations because company filings
+do not all present identical line items or periods.
+
+The output is the FCFF growth implied by the price under the printed
+assumptions. It is not a prediction of stock returns, and SEC filings alone
+cannot determine WACC or terminal growth. Use `-as-of`, `-years`, `-wacc-min`,
+`-wacc-max`, `-wacc-step`, and `-terminal-growth` to inspect other
+assumptions.
