@@ -141,3 +141,12 @@ func (c *Client) Facts(
 	}
 	return &result, nil
 }
+
+func (c *Client) Submissions(ctx context.Context, cik string) (*CompanySubmissions, error) {
+	var result CompanySubmissions
+	url := secBase + "/submissions/CIK" + cik + ".json"
+	if err := c.get(ctx, url, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}

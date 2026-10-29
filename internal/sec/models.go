@@ -29,6 +29,69 @@ type CompanyFacts struct {
 	} `json:"facts"`
 }
 
+type CompanySubmissions struct {
+	CIK     string `json:"cik"`
+	Name    string `json:"name"`
+	Filings struct {
+		Recent FilingHistory `json:"recent"`
+	} `json:"filings"`
+}
+
+type FilingHistory struct {
+	AccessionNumber       []string `json:"accessionNumber"`
+	FilingDate            []string `json:"filingDate"`
+	ReportDate            []string `json:"reportDate"`
+	Form                  []string `json:"form"`
+	PrimaryDocument       []string `json:"primaryDocument"`
+	PrimaryDocDescription []string `json:"primaryDocDescription"`
+}
+
+type Filing struct {
+	CIK             string
+	Accession       string
+	Form            string
+	FilingDate      string
+	ReportDate      string
+	PrimaryDocument string
+	DocumentTitle   string
+}
+
+func (s *CompanySubmissions) RecentFilings(cik string) []Filing {
+	if s == nil {
+		return nil
+	}
+	h := s.Filings.Recent
+	count := len(h.AccessionNumber)
+	for _, n := range []int{len(h.FilingDate), len(h.Form), len(h.PrimaryDocument)} {
+		if n < count {
+			count = n
+		}
+	}
+	filings := make([]Filing, 0, count)
+	for i := 0; i < count; i++ {
+		accession := strings.TrimSpace(h.AccessionNumber[i])
+		primaryDocument := strings.TrimSpace(h.PrimaryDocument[i])
+		if accession == "" || primaryDocument == "" || strings.Contains(primaryDocument, "..") || strings.ContainsAny(primaryDocument, "/\\") {
+			continue
+		}
+		filing := Filing{
+			CIK:             cik,
+			Accession:       accession,
+			Form:            h.Form[i],
+			FilingDate:      h.FilingDate[i],
+			PrimaryDocument: primaryDocument,
+		}
+		if i < len(h.ReportDate) {
+			filing.ReportDate = h.ReportDate[i]
+		}
+		if i < len(h.PrimaryDocDescription) {
+			filing.DocumentTitle = h.PrimaryDocDescription[i]
+		}
+		filings = append(filings, filing)
+	}
+	return filings
+}
+
 type FinancialFact struct {
 	Company    string  `json:"company"`
 	CIK        string  `json:"cik"`
@@ -93,7 +156,7 @@ func ExtractFacts(data *CompanyFacts, cik string) []FinancialFact {
 
 		for unit, entries := range def.Units {
 			for _, e := range entries {
-				if !dcfFilingForm(e.Form) {
+				if !secFilingForm(e.Form) {
 					continue
 				}
 				out = append(out, FinancialFact{
@@ -127,7 +190,7 @@ func ExtractFacts(data *CompanyFacts, cik string) []FinancialFact {
 	return out
 }
 
-func dcfFilingForm(form string) bool {
+func secFilingForm(form string) bool {
 	switch form {
 	case "10-K", "10-Q", "20-F", "40-F", "6-K":
 		return true

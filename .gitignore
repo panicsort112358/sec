@@ -33,6 +33,3 @@ go.work.sum
 # .vscode/
 
 sec
-dcf
-!internal/dcf/
-!internal/dcf/*.go

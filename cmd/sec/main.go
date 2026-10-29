@@ -6,6 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"sec/internal/sec"
@@ -14,23 +17,29 @@ import (
 
 const usage = `usage: sec -ticker SYMBOL [options]
 
-Fetch SEC XBRL facts used to prepare a DCF model and save them to SQLite.
+Fetch SEC company facts and filings, or read saved filings in the terminal.
 
 options:
-  -ticker string   company ticker symbol, e.g. AAPL (required)
-  -db string       SQLite database file (default SEC_DATABASE_PATH or sec.db)
-  -ua string       SEC User-Agent including contact email (default SEC_USER_AGENT)
+  -ticker string    company ticker symbol, e.g. AAPL (required)
+  -data-dir string  directory for per-company SQLite databases (default SEC_DATABASE_DIR or data)
+  -ua string        SEC User-Agent including contact email (default SEC_USER_AGENT)
+  -read             browse and read saved filings in the terminal
 `
 
+var tickerPattern = regexp.MustCompile(`^[A-Z0-9][A-Z0-9.-]{0,14}$`)
+
 func run() error {
-	ticker := flag.String("ticker", "", "company ticker symbol, e.g. AAPL")
-	database := flag.String("db", sqlite.DefaultPath(), "SQLite database file")
+	tickerFlag := flag.String("ticker", "", "company ticker symbol, e.g. AAPL")
+	dataDir := flag.String("data-dir", sqlite.DefaultDirectory(), "directory for per-company SQLite databases")
 	userAgent := flag.String("ua", os.Getenv("SEC_USER_AGENT"), "SEC User-Agent including contact email")
+	read := flag.Bool("read", false, "browse and read saved filings in the terminal")
 	flag.Usage = func() { fmt.Fprint(flag.CommandLine.Output(), usage) }
 	flag.CommandLine.SetOutput(os.Stderr)
 	flag.Parse()
-	if *ticker == "" {
-		return errors.New("provide -ticker")
+
+	ticker := strings.ToUpper(strings.TrimSpace(*tickerFlag))
+	if !tickerPattern.MatchString(ticker) || ticker == "." || ticker == ".." {
+		return errors.New("provide a valid -ticker symbol, for example AAPL")
 	}
 	if *userAgent == "" {
 		return errors.New("provide -ua 'Research App contact@example.com' or set SEC_USER_AGENT")
@@ -38,23 +47,43 @@ func run() error {
 	if flag.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+	databasePath := filepath.Join(*dataDir, ticker+".db")
+
+	if *read {
+		return sec.ReadFilings(context.Background(), databasePath, ticker, *userAgent, os.Stdin, os.Stdout)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	client := sec.NewClient(*userAgent)
-	cik, err := client.ResolveTicker(ctx, *ticker)
+	cik, err := client.ResolveTicker(ctx, ticker)
 	if err != nil {
 		return err
+	}
+	submissions, err := client.Submissions(ctx, cik)
+	if err != nil {
+		return fmt.Errorf("fetch SEC filing submissions: %w", err)
 	}
 	factsData, err := client.Facts(ctx, cik)
 	if err != nil {
 		return fmt.Errorf("fetch SEC company facts: %w", err)
 	}
 	facts := sec.ExtractFacts(factsData, cik)
-	if err := sec.SaveFacts(ctx, *database, *ticker, facts); err != nil {
+	filings := submissions.RecentFilings(cik)
+	companyName := submissions.Name
+	if strings.TrimSpace(companyName) == "" {
+		companyName = factsData.Entity
+	}
+	if err := sec.SaveCompany(ctx, databasePath, cik, companyName, ticker); err != nil {
 		return err
 	}
-	fmt.Printf("saved_dcf_facts=%d ticker=%s cik=%s database=%s\n", len(facts), *ticker, cik, *database)
+	if err := sec.SaveFacts(ctx, databasePath, ticker, facts); err != nil {
+		return err
+	}
+	if err := sec.SaveFilings(ctx, databasePath, filings); err != nil {
+		return err
+	}
+	fmt.Printf("saved_facts=%d saved_filings=%d ticker=%s cik=%s database=%s\n", len(facts), len(filings), ticker, cik, databasePath)
 	return nil
 }
 
